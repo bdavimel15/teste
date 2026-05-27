@@ -1,0 +1,8 @@
+[phases.setup]
+nixPkgs = ["php"]
+
+[phases.build]
+cmds = ["echo 'No build needed'"]
+
+[start]
+cmd = "php -S 0.0.0.0:$PORT -t public"
