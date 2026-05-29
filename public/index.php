@@ -1,595 +1,726 @@
 <?php
 declare(strict_types=1);
+
 require_once dirname(__DIR__) . '/src/bootstrap.php';
 
-$zaiaUrl  = Config::get('ZAIA_WEBHOOK_URL', '');
-$botName  = Config::get('BOT_NAME', 'QueryBot');
-$botSub   = Config::get('BOT_SUBTITLE', 'Pergunte sobre o seu delivery');
-$botColor = Config::get('BOT_COLOR', '#7c3aed');
-$debug    = Config::bool('APP_DEBUG');
-$hasZaia  = $zaiaUrl !== '';
-
-// Sugestões rápidas
-$suggestions = [
-    ['label' => 'Vendas hoje',        'msg' => 'Quanto vendemos hoje?'],
-    ['label' => 'Vendas ontem',       'msg' => 'Quanto vendemos ontem?'],
-    ['label' => 'Top produtos',       'msg' => 'Quais são os produtos mais vendidos?'],
-    ['label' => 'Estoque baixo',      'msg' => 'Quais produtos estão com estoque baixo?'],
-    ['label' => 'Últimos pedidos',    'msg' => 'Mostre os últimos pedidos.'],
-    ['label' => 'Total de clientes',  'msg' => 'Quantos clientes temos cadastrados?'],
-];
+$botName = Config::get('BOT_NAME', 'QueryBot');
+$botColor = Config::get('BOT_COLOR', '#6D5EF7');
+$initialTokens = (int) Config::get('INITIAL_TOKENS', '100');
 ?>
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title><?= htmlspecialchars($botName) ?></title>
+<title><?= htmlspecialchars($botName, ENT_QUOTES, 'UTF-8') ?></title>
 <style>
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-:root{
-  --primary:<?= $botColor ?>;
-  --primary-dark:color-mix(in srgb,<?= $botColor ?> 80%,#000);
-  --bg:#f5f5f5;
-  --surface:#fff;
-  --border:#e5e7eb;
-  --text:#111827;
-  --muted:#6b7280;
-  --msg-user-bg:<?= $botColor ?>;
-  --msg-bot-bg:#f3f4f6;
-  --radius:16px;
-  --sidebar:260px;
-}
-html,body{height:100%;overflow:hidden}
-body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);display:flex;flex-direction:column}
+  * { box-sizing: border-box; margin: 0; padding: 0; }
 
-/* ── Header ── */
-.header{
-  background:var(--primary);
-  color:#fff;
-  padding:14px 20px;
-  display:flex;
-  align-items:center;
-  gap:12px;
-  flex-shrink:0;
-  box-shadow:0 2px 8px rgba(0,0,0,.2);
-}
-.header-avatar{
-  width:42px;height:42px;
-  background:rgba(255,255,255,.2);
-  border-radius:50%;
-  display:flex;align-items:center;justify-content:center;
-  font-size:20px;flex-shrink:0;
-}
-.header-info h1{font-size:1rem;font-weight:600;line-height:1.2}
-.header-info p{font-size:.78rem;opacity:.8}
-.header-actions{margin-left:auto;display:flex;gap:8px}
-.header-actions a,.header-actions button{
-  color:#fff;background:rgba(255,255,255,.15);
-  border:1px solid rgba(255,255,255,.25);
-  padding:6px 12px;border-radius:8px;font-size:.78rem;
-  cursor:pointer;text-decoration:none;display:flex;align-items:center;gap:5px;
-  transition:background .15s;
-}
-.header-actions a:hover,.header-actions button:hover{background:rgba(255,255,255,.25)}
+  :root {
+    --qb-primary: <?= htmlspecialchars($botColor, ENT_QUOTES, 'UTF-8') ?>;
+    --qb-primary-dark: #4f46e5;
+    --qb-primary-soft: #f1edff;
+    --qb-bg: #f7f7fb;
+    --qb-card: #ffffff;
+    --qb-soft: #fafafe;
+    --qb-border: #e7e7ef;
+    --qb-border-2: #d8d7e6;
+    --qb-text: #171725;
+    --qb-muted: #6b7280;
+    --qb-muted-2: #8b8fa1;
+    --qb-success: #16a34a;
+    --qb-danger: #dc2626;
+  }
 
-/* ── Layout ── */
-.layout{display:flex;flex:1;overflow:hidden}
+  html, body { min-height: 100%; }
 
-/* ── Sidebar ── */
-.sidebar{
-  width:var(--sidebar);
-  background:var(--surface);
-  border-right:1px solid var(--border);
-  display:flex;flex-direction:column;
-  padding:16px;gap:6px;overflow-y:auto;flex-shrink:0;
-}
-.sidebar h2{font-size:.68rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:12px 0 6px}
-.sidebar h2:first-child{margin-top:0}
-.quick-btn{
-  background:none;border:1px solid var(--border);
-  border-radius:10px;padding:9px 12px;
-  color:var(--text);font-size:.82rem;cursor:pointer;
-  text-align:left;transition:border-color .15s,background .15s;line-height:1.3;
-}
-.quick-btn:hover{border-color:var(--primary);background:color-mix(in srgb,var(--primary) 6%,#fff)}
-.sidebar-link{
-  display:flex;align-items:center;gap:8px;
-  padding:8px 10px;border-radius:8px;
-  color:var(--muted);font-size:.82rem;text-decoration:none;
-  transition:background .15s,color .15s;
-}
-.sidebar-link:hover{background:var(--bg);color:var(--text)}
-.sidebar-link svg{width:16px;height:16px;flex-shrink:0}
+  body {
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background:
+      radial-gradient(circle at top left, color-mix(in srgb, var(--qb-primary) 14%, transparent), transparent 34%),
+      radial-gradient(circle at bottom right, rgba(124, 58, 237, .10), transparent 40%),
+      var(--qb-bg);
+    color: var(--qb-text);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 18px;
+  }
 
-/* ── Main ── */
-main{flex:1;display:flex;flex-direction:column;overflow:hidden;background:var(--surface)}
+  .qb-root {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    max-width: 880px;
+    height: min(740px, calc(100vh - 36px));
+    background: rgba(255,255,255,.98);
+    border: 1px solid var(--qb-border);
+    border-radius: 24px;
+    overflow: hidden;
+    box-shadow: 0 24px 80px rgba(23, 23, 37, .10);
+  }
 
-/* ── Tokens bar ── */
-.tokens-bar{
-  padding:6px 16px;font-size:.72rem;color:var(--muted);
-  border-bottom:1px solid var(--border);text-align:center;
-  background:color-mix(in srgb,var(--primary) 4%,#fff);
-}
+  .qb-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--qb-border);
+    background: #fff;
+    flex-shrink: 0;
+  }
 
-/* ── Messages ── */
-.messages{flex:1;overflow-y:auto;padding:20px 16px;display:flex;flex-direction:column;gap:12px}
-.msg-wrap{display:flex;flex-direction:column;max-width:78%}
-.msg-wrap.user{align-self:flex-end;align-items:flex-end}
-.msg-wrap.bot{align-self:flex-start;align-items:flex-start}
-.msg-label{font-size:.68rem;color:var(--muted);margin-bottom:3px;padding:0 4px}
-.msg{
-  padding:11px 15px;border-radius:var(--radius);
-  font-size:.9rem;line-height:1.55;word-break:break-word;
-}
-.msg.user{
-  background:var(--primary);color:#fff;
-  border-bottom-right-radius:4px;
-}
-.msg.bot{
-  background:var(--msg-bot-bg);color:var(--text);
-  border-bottom-left-radius:4px;border:1px solid var(--border);
-}
-.msg.bot strong{font-weight:700}
-.msg.bot em{font-style:italic}
-.msg.bot.debug-msg{
-  background:#fefce8;border-color:#fde047;
-  font-family:monospace;font-size:.78rem;color:#713f12;
-}
-.msg .time{font-size:.65rem;opacity:.6;margin-top:4px;display:block;text-align:right}
-.typing{display:flex;gap:4px;align-items:center;padding:14px 16px}
-.typing span{width:7px;height:7px;background:var(--muted);border-radius:50%;animation:bounce .9s infinite}
-.typing span:nth-child(2){animation-delay:.15s}
-.typing span:nth-child(3){animation-delay:.3s}
-@keyframes bounce{0%,80%,100%{transform:translateY(0)}40%{transform:translateY(-6px)}}
+  .qb-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, var(--qb-primary), #8b5cf6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 19px;
+    flex-shrink: 0;
+    box-shadow: 0 10px 22px color-mix(in srgb, var(--qb-primary) 24%, transparent);
+  }
 
-/* ── Poll status ── */
-.poll-info{
-  font-size:.68rem;color:var(--muted);padding:2px 6px;
-  background:var(--bg);border:1px solid var(--border);
-  border-radius:6px;display:inline-block;
-}
+  .qb-header-info { flex: 1; min-width: 0; }
 
-/* ── Input area ── */
-.input-area{
-  padding:12px 16px;border-top:1px solid var(--border);
-  background:var(--surface);
-}
-.input-row{display:flex;gap:8px;align-items:flex-end}
-.input-row textarea{
-  flex:1;padding:10px 14px;
-  border:1.5px solid var(--border);border-radius:12px;
-  font-size:.9rem;font-family:inherit;
-  resize:none;outline:none;min-height:44px;max-height:120px;
-  transition:border-color .15s;line-height:1.4;
-  color:var(--text);background:var(--bg);
-}
-.input-row textarea:focus{border-color:var(--primary)}
-.send-btn{
-  width:44px;height:44px;border-radius:12px;
-  background:var(--primary);color:#fff;border:none;
-  cursor:pointer;display:flex;align-items:center;justify-content:center;
-  flex-shrink:0;transition:background .15s,transform .1s;
-}
-.send-btn:hover{background:var(--primary-dark)}
-.send-btn:active{transform:scale(.94)}
-.send-btn:disabled{opacity:.45;cursor:wait}
-.input-footer{
-  display:flex;align-items:center;justify-content:space-between;
-  margin-top:8px;font-size:.72rem;color:var(--muted);
-}
-.debug-toggle{display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none}
-.debug-toggle input{accent-color:var(--primary)}
+  .qb-header-name {
+    font-size: 15px;
+    font-weight: 750;
+    color: var(--qb-text);
+    line-height: 1.2;
+  }
 
-/* ── Reply button on hover ── */
-.msg-wrap{position:relative}
-.msg-wrap:hover .reply-btn{opacity:1}
-.reply-btn{
-  position:absolute;
-  opacity:0;transition:opacity .15s;
-  background:var(--surface);border:1px solid var(--border);
-  border-radius:999px;padding:3px 8px;font-size:.7rem;
-  cursor:pointer;color:var(--muted);
-  display:flex;align-items:center;gap:4px;
-  box-shadow:0 1px 4px rgba(0,0,0,.1);
-  white-space:nowrap;
-}
-.reply-btn:hover{background:var(--bg);color:var(--text)}
-.msg-wrap.user .reply-btn{left:0;bottom:-10px}
-.msg-wrap.bot  .reply-btn{right:0;bottom:-10px}
+  .qb-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--qb-muted);
+    margin-top: 3px;
+  }
 
-/* ── Reply quote inside bubble ── */
-.reply-quote{
-  border-left:3px solid var(--primary);
-  background:rgba(0,0,0,.06);
-  border-radius:4px;
-  padding:5px 8px;
-  margin-bottom:7px;
-  font-size:.78rem;
-  line-height:1.35;
-  cursor:pointer;
-}
-.msg.user .reply-quote{border-left-color:rgba(255,255,255,.6);background:rgba(255,255,255,.15)}
-.reply-quote .rq-author{font-weight:600;margin-bottom:2px;font-size:.72rem}
-.reply-quote .rq-text{
-  overflow:hidden;display:-webkit-box;
-  -webkit-line-clamp:2;-webkit-box-orient:vertical;
-  opacity:.85;
-}
+  .qb-status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--qb-success);
+    flex-shrink: 0;
+    box-shadow: 0 0 0 3px rgba(22,163,74,.12);
+  }
 
-/* ── Reply preview bar above input ── */
-.reply-bar{
-  display:none;
-  align-items:center;gap:10px;
-  padding:8px 12px;margin-bottom:6px;
-  background:color-mix(in srgb,var(--primary) 8%,#fff);
-  border:1px solid color-mix(in srgb,var(--primary) 20%,#fff);
-  border-radius:10px;
-  font-size:.8rem;
-}
-.reply-bar.show{display:flex}
-.reply-bar-bar{
-  width:3px;height:100%;min-height:30px;
-  background:var(--primary);border-radius:2px;flex-shrink:0;
-}
-.reply-bar-info{flex:1;overflow:hidden}
-.reply-bar-author{font-weight:600;color:var(--primary);font-size:.75rem;margin-bottom:2px}
-.reply-bar-text{
-  color:var(--muted);white-space:nowrap;
-  overflow:hidden;text-overflow:ellipsis;
-}
-.reply-bar-close{
-  background:none;border:none;cursor:pointer;
-  color:var(--muted);font-size:1.1rem;line-height:1;
-  padding:2px 4px;border-radius:4px;transition:color .15s;
-}
-.reply-bar-close:hover{color:var(--text)}
+  .qb-header-tokens {
+    font-size: 12px;
+    color: var(--qb-muted);
+    background: var(--qb-soft);
+    border: 1px solid var(--qb-border);
+    border-radius: 999px;
+    padding: 6px 11px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+  }
 
-/* ── Scrollbar ── */
-.messages::-webkit-scrollbar{width:4px}
-.messages::-webkit-scrollbar-track{background:transparent}
-.messages::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
+  .qb-header-tokens .spark { color: var(--qb-primary); }
 
-@media(max-width:640px){
-  .sidebar{display:none}
-  .header-actions a[href="/admin"]{display:none}
-}
+  .qb-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px 20px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    scroll-behavior: smooth;
+    background: linear-gradient(180deg, #fff, #fafafe);
+  }
+
+  .qb-body::-webkit-scrollbar { width: 4px; }
+  .qb-body::-webkit-scrollbar-track { background: transparent; }
+  .qb-body::-webkit-scrollbar-thumb { background: var(--qb-border-2); border-radius: 4px; }
+
+  .qb-welcome {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    margin: auto 0;
+    padding: 18px 14px;
+    text-align: center;
+  }
+
+  .qb-welcome-icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 18px;
+    background: var(--qb-primary-soft);
+    border: 1px solid color-mix(in srgb, var(--qb-primary) 22%, white);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 27px;
+  }
+
+  .qb-welcome-title {
+    font-size: 17px;
+    font-weight: 750;
+    color: var(--qb-text);
+  }
+
+  .qb-welcome-sub {
+    font-size: 13px;
+    color: var(--qb-muted);
+    text-align: center;
+    max-width: 340px;
+    line-height: 1.55;
+  }
+
+  .qb-group { display: flex; flex-direction: column; gap: 5px; }
+
+  .qb-agent-card {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-left: 39px;
+    margin-bottom: 1px;
+  }
+
+  .qb-agent-icon {
+    width: 23px;
+    height: 23px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--qb-primary-soft);
+    border: 1px solid color-mix(in srgb, var(--qb-primary) 18%, white);
+    font-size: 13px;
+  }
+
+  .qb-agent-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    line-height: 1.15;
+  }
+
+  .qb-agent-name {
+    font-size: 12px;
+    font-weight: 850;
+    color: var(--qb-text);
+  }
+
+  .qb-agent-title {
+    font-size: 10.5px;
+    color: var(--qb-muted);
+  }
+
+  .qb-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 9px;
+  }
+
+  .qb-row.user { flex-direction: row-reverse; }
+
+  .qb-msg-avatar {
+    width: 30px;
+    height: 30px;
+    border-radius: 10px;
+    background: #fff;
+    border: 1px solid var(--qb-border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    flex-shrink: 0;
+    align-self: flex-end;
+    margin-bottom: 2px;
+    box-shadow: 0 4px 14px rgba(23,23,37,.05);
+  }
+
+  .qb-bubble {
+    max-width: 76%;
+    padding: 11px 14px;
+    border-radius: 16px;
+    font-size: 14px;
+    line-height: 1.62;
+    color: var(--qb-text);
+    position: relative;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+
+  .qb-bubble.ai {
+    background: #fff;
+    border: 1px solid var(--qb-border);
+    border-bottom-left-radius: 5px;
+    box-shadow: 0 6px 22px rgba(23,23,37,.05);
+  }
+
+  .qb-bubble.user {
+    background: linear-gradient(135deg, var(--qb-primary), #7c3aed);
+    color: #fff;
+    border-bottom-right-radius: 5px;
+    box-shadow: 0 10px 24px color-mix(in srgb, var(--qb-primary) 22%, transparent);
+  }
+
+  .qb-bubble.error {
+    border-color: rgba(220,38,38,.25);
+    background: #fff5f5;
+    color: #991b1b;
+  }
+
+  .qb-bubble-time {
+    font-size: 11px;
+    color: var(--qb-muted-2);
+    padding: 0 4px;
+  }
+
+  .qb-row.user .qb-bubble-time { text-align: right; }
+
+  .qb-typing {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 11px 14px;
+    background: #fff;
+    border: 1px solid var(--qb-border);
+    border-radius: 16px;
+    border-bottom-left-radius: 5px;
+    width: fit-content;
+    box-shadow: 0 6px 22px rgba(23,23,37,.05);
+  }
+
+  .qb-typing span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--qb-muted);
+    animation: typing 1.2s infinite;
+  }
+
+  .qb-typing span:nth-child(2) { animation-delay: 0.2s; }
+  .qb-typing span:nth-child(3) { animation-delay: 0.4s; }
+
+  @keyframes typing {
+    0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
+    30% { opacity: 1; transform: translateY(-3px); }
+  }
+
+  .qb-footer {
+    padding: 12px 16px 16px;
+    border-top: 1px solid var(--qb-border);
+    background: #fff;
+    flex-shrink: 0;
+  }
+
+  .qb-input-wrap {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    background: var(--qb-soft);
+    border: 1px solid var(--qb-border-2);
+    border-radius: 15px;
+    padding: 9px 9px 9px 14px;
+    transition: border-color 0.15s, box-shadow 0.15s, background .15s;
+  }
+
+  .qb-input-wrap:focus-within {
+    background: #fff;
+    border-color: var(--qb-primary);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--qb-primary) 13%, transparent);
+  }
+
+  .qb-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    font-size: 14px;
+    font-family: inherit;
+    color: var(--qb-text);
+    resize: none;
+    max-height: 120px;
+    line-height: 1.5;
+    padding: 3px 0;
+  }
+
+  .qb-input::placeholder { color: var(--qb-muted-2); }
+
+  .qb-send {
+    width: 36px;
+    height: 36px;
+    border-radius: 11px;
+    background: var(--qb-primary);
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: background 0.15s, transform 0.1s, opacity .15s;
+    color: #fff;
+    font-weight: 900;
+  }
+
+  .qb-send:hover { background: var(--qb-primary-dark); }
+  .qb-send:active { transform: scale(0.95); }
+
+  .qb-send:disabled {
+    background: #e5e7eb;
+    color: #9ca3af;
+    cursor: not-allowed;
+  }
+
+  .qb-footer-hint {
+    font-size: 11px;
+    color: var(--qb-muted-2);
+    text-align: center;
+    margin-top: 8px;
+  }
+
+  .qb-footer-hint kbd {
+    background: #f3f4f6;
+    border: 1px solid #e5e7eb;
+    border-radius: 4px;
+    padding: 1px 4px;
+    font-size: 10px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+
+  @media (max-width: 520px) {
+    body { padding: 0; }
+    .qb-root { height: 100dvh; border-radius: 0; border: 0; }
+    .qb-bubble { max-width: 88%; }
+    .qb-header-tokens { display: flex; font-size: 11px; padding: 5px 8px; }
+    .qb-body { padding: 16px 12px 8px; }
+    .qb-footer { padding: 10px 12px 14px; }
+  }
 </style>
 </head>
 <body>
 
-<div class="header">
-  <div class="header-avatar">🤖</div>
-  <div class="header-info">
-    <h1><?= htmlspecialchars($botName) ?></h1>
-    <p><?= htmlspecialchars($botSub) ?></p>
-  </div>
-  <div class="header-actions">
-    <?php if (!$hasZaia): ?>
-      <span style="font-size:.75rem;opacity:.7">⚠ ZAIA_WEBHOOK_URL não configurado</span>
-    <?php endif; ?>
-    <a href="/admin">⚙ Admin</a>
-  </div>
-</div>
+<h2 class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);">QueryBot — Interface de chat com IA</h2>
 
-<div class="layout">
+<div class="qb-root">
 
-  <aside class="sidebar">
-    <h2>Sugestões</h2>
-    <?php foreach ($suggestions as $s): ?>
-      <button class="quick-btn" onclick="sendQuick(<?= htmlspecialchars(json_encode($s['msg']), ENT_QUOTES) ?>)">
-        <?= htmlspecialchars($s['label']) ?>
-      </button>
-    <?php endforeach; ?>
-
-    <h2 style="margin-top:16px">Navegação</h2>
-    <a class="sidebar-link" href="/admin">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-      Painel Admin
-    </a>
-    <a class="sidebar-link" href="/api/health.php" target="_blank">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-      Health check
-    </a>
-  </aside>
-
-  <main>
-    <div class="tokens-bar" id="tokensBar">Tokens (IA) disponíveis: —</div>
-
-    <div class="messages" id="messages">
-      <div class="msg-wrap bot">
-        <span class="msg-label">assistant</span>
-        <div class="msg bot">Olá! 👋 Pode me perguntar sobre vendas, produtos, clientes ou pedidos do seu delivery.</div>
+  <div class="qb-header">
+    <div class="qb-avatar" aria-hidden="true">🤖</div>
+    <div class="qb-header-info">
+      <div class="qb-header-name"><?= htmlspecialchars($botName, ENT_QUOTES, 'UTF-8') ?></div>
+      <div class="qb-status">
+        <div class="qb-status-dot" aria-hidden="true"></div>
+        Online agora
       </div>
     </div>
-
-    <div class="input-area">
-      <div class="reply-bar" id="replyBar">
-        <div class="reply-bar-bar"></div>
-        <div class="reply-bar-info">
-          <div class="reply-bar-author" id="replyBarAuthor"></div>
-          <div class="reply-bar-text"   id="replyBarText"></div>
-        </div>
-        <button class="reply-bar-close" onclick="cancelReply()" title="Cancelar resposta">✕</button>
-      </div>
-      <div class="input-row">
-        <textarea id="msgInput" placeholder="Digite uma mensagem..." rows="1"></textarea>
-        <button class="send-btn" id="sendBtn" onclick="sendMessage()" title="Enviar">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-        </button>
-      </div>
-      <div class="input-footer">
-        <label class="debug-toggle">
-          <input type="checkbox" id="debugCheck" onchange="toggleDebug(this.checked)">
-          Modo depuração
-        </label>
-        <span id="pollInfo" class="poll-info" style="display:none"></span>
-      </div>
+    <div class="qb-header-tokens" title="Tokens de IA disponíveis">
+      <span class="spark" aria-hidden="true">✦</span>
+      <span id="token-display"><?= $initialTokens ?> tokens</span>
     </div>
-  </main>
+  </div>
+
+  <div class="qb-body" id="qb-body" role="log" aria-live="polite" aria-label="Conversa">
+    <div class="qb-welcome" id="qb-welcome">
+      <div class="qb-welcome-icon" aria-hidden="true">🤖</div>
+      <div class="qb-welcome-title">Olá! Sou o <?= htmlspecialchars($botName, ENT_QUOTES, 'UTF-8') ?></div>
+      <div class="qb-welcome-sub">Digite sua mensagem para iniciar o atendimento.</div>
+    </div>
+  </div>
+
+  <div class="qb-footer">
+    <div class="qb-input-wrap">
+      <textarea
+        class="qb-input"
+        id="qb-input"
+        rows="1"
+        placeholder="Digite sua mensagem..."
+        aria-label="Mensagem para o QueryBot"
+      ></textarea>
+      <button class="qb-send" id="qb-send" aria-label="Enviar mensagem" disabled>➤</button>
+    </div>
+    <div class="qb-footer-hint">
+      <kbd>Enter</kbd> para enviar &nbsp;·&nbsp; <kbd>Shift</kbd>+<kbd>Enter</kbd> para nova linha
+    </div>
+  </div>
+
 </div>
 
 <script>
-const ZAIA_URL  = <?= json_encode($zaiaUrl) ?>;
-const IS_DEBUG  = <?= json_encode($debug) ?>;
+const input = document.getElementById('qb-input');
+const sendBtn = document.getElementById('qb-send');
+const bodyEl = document.getElementById('qb-body');
+const welcome = document.getElementById('qb-welcome');
+const tokenDisplay = document.getElementById('token-display');
 
-let debugMode   = false;
-let pollTimer   = null;
-let pollCount   = 0;
-let pollStart   = 0;
-let jobActive   = 0;
+let currentTokens = <?= $initialTokens ?>;
+let isTyping = false;
 
-// ── Textarea auto-resize ────────────────────────────────────────
-const input = document.getElementById('msgInput');
-input.addEventListener('input', () => {
-  input.style.height = 'auto';
-  input.style.height = Math.min(input.scrollHeight, 120) + 'px';
-});
-input.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
-});
+const agentMap = {
+  lia: { emoji: '💜', name: 'Lia', title: 'Especialista em Conversação' },
+  querybot: { emoji: '🤖', name: 'QueryBot', title: 'Análise de Dados' },
+  cs: { emoji: '🛟', name: 'CS', title: 'Suporte ao Cliente' },
+  gerente: { emoji: '🧠', name: 'Gerente', title: 'Roteamento Inteligente' },
+  formatter: { emoji: '✨', name: 'Formatter', title: 'Formatação de Resposta' },
+  sistema: { emoji: '⚙️', name: 'Sistema', title: 'Status da Integração' },
+  default: { emoji: '🤖', name: 'QueryBot', title: 'Assistente de IA' },
+};
 
-// ── Debug toggle ────────────────────────────────────────────────
-function toggleDebug(on) {
-  debugMode = on;
-  document.querySelectorAll('.debug-msg').forEach(el => {
-    el.closest('.msg-wrap').style.display = on ? '' : 'none';
-  });
-}
-
-// ── Reply state ─────────────────────────────────────────────────
-let replyingTo = null; // { author, text, msgId }
-let msgCounter = 0;
-
-function startReply(msgId, author, text) {
-  replyingTo = { msgId, author, text };
-  document.getElementById('replyBarAuthor').textContent = author;
-  document.getElementById('replyBarText').textContent   = text.replace(/<[^>]+>/g,'').slice(0,120);
-  document.getElementById('replyBar').classList.add('show');
-  document.getElementById('msgInput').focus();
-  // Highlight the quoted message
-  document.querySelectorAll('.msg-wrap').forEach(w => w.style.background = '');
-  const target = document.getElementById('msg-' + msgId);
-  if (target) {
-    target.style.background = 'color-mix(in srgb,var(--primary) 8%,var(--surface))';
-    target.style.borderRadius = 'var(--radius)';
-    target.scrollIntoView({behavior:'smooth', block:'nearest'});
+function updateTokenDisplay(tokens) {
+  if (typeof tokens === 'number' && Number.isFinite(tokens)) {
+    currentTokens = Math.max(0, Math.floor(tokens));
   }
+
+  tokenDisplay.textContent = currentTokens === 1
+    ? '1 token'
+    : `${currentTokens} tokens`;
 }
 
-function cancelReply() {
-  replyingTo = null;
-  document.getElementById('replyBar').classList.remove('show');
-  document.querySelectorAll('.msg-wrap').forEach(w => { w.style.background=''; w.style.borderRadius=''; });
+function scrollToBottom() {
+  bodyEl.scrollTop = bodyEl.scrollHeight;
 }
 
-function scrollToMsg(msgId) {
-  const el = document.getElementById('msg-' + msgId);
-  if (!el) return;
-  el.scrollIntoView({behavior:'smooth', block:'center'});
-  el.style.transition = 'background .2s';
-  el.style.background = 'color-mix(in srgb,var(--primary) 14%,var(--surface))';
-  el.style.borderRadius = 'var(--radius)';
-  setTimeout(() => { el.style.background=''; el.style.borderRadius=''; }, 1200);
+function now() {
+  return new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 }
 
-// ── Append message ──────────────────────────────────────────────
-// agentName: nome do agente que gerou a resposta (ex: "Lia", "QueryBot", "CS")
-function appendMsg(text, role, isDebug = false, agentName = null, quotedReply = null) {
-  const msgs = document.getElementById('messages');
-  const wrap = document.createElement('div');
-  const id   = ++msgCounter;
-  wrap.id        = 'msg-' + id;
-  wrap.className = 'msg-wrap ' + role;
-  wrap.style.paddingBottom = '14px'; // space for reply btn
+function normalizeAgentKey(agent) {
+  const key = String(agent || '').trim().toLowerCase();
 
-  const label = document.createElement('span');
-  label.className = 'msg-label';
+  if (key.includes('lia')) return 'lia';
+  if (key.includes('query')) return 'querybot';
+  if (key.includes('cs') || key.includes('suporte')) return 'cs';
+  if (key.includes('gerente')) return 'gerente';
+  if (key.includes('formatter') || key.includes('format')) return 'formatter';
+  if (key.includes('sistema')) return 'sistema';
+
+  return key || 'default';
+}
+
+function getAgent(agentKey) {
+  return agentMap[normalizeAgentKey(agentKey)] || agentMap.default;
+}
+
+function appendUserMsg(text) {
+  if (welcome) welcome.style.display = 'none';
+
+  const group = document.createElement('div');
+  group.className = 'qb-group';
+
+  const row = document.createElement('div');
+  row.className = 'qb-row user';
 
   const bubble = document.createElement('div');
-  bubble.className = 'msg ' + role + (isDebug ? ' debug-msg' : '');
+  bubble.className = 'qb-bubble user';
+  bubble.textContent = text;
 
-  const now = new Date().toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit'});
+  row.appendChild(bubble);
+  group.appendChild(row);
 
-  let quoteHtml = '';
-  if (quotedReply) {
-    quoteHtml = `<div class="reply-quote" onclick="scrollToMsg(${quotedReply.msgId})">
-      <div class="rq-author">${esc(quotedReply.author)}</div>
-      <div class="rq-text">${esc(quotedReply.text.replace(/<[^>]+>/g,'').slice(0,120))}</div>
-    </div>`;
+  const timeEl = document.createElement('div');
+  timeEl.className = 'qb-bubble-time';
+  timeEl.style.textAlign = 'right';
+  timeEl.textContent = now();
+  group.appendChild(timeEl);
+
+  bodyEl.appendChild(group);
+  scrollToBottom();
+}
+
+function showTypingIndicator(agentKey = 'lia') {
+  const agent = getAgent(agentKey);
+
+  const wrap = document.createElement('div');
+  wrap.id = 'qb-typing-wrap';
+  wrap.className = 'qb-group';
+
+  const row = document.createElement('div');
+  row.className = 'qb-row';
+
+  const av = document.createElement('div');
+  av.className = 'qb-msg-avatar';
+  av.textContent = agent.emoji;
+
+  const t = document.createElement('div');
+  t.className = 'qb-typing';
+  t.innerHTML = '<span></span><span></span><span></span>';
+  t.setAttribute('aria-label', 'Digitando...');
+
+  row.appendChild(av);
+  row.appendChild(t);
+  wrap.appendChild(row);
+  bodyEl.appendChild(wrap);
+  scrollToBottom();
+
+  return wrap;
+}
+
+function appendAIMsg(text, agentKey = 'default', isError = false) {
+  const typingWrap = document.getElementById('qb-typing-wrap');
+  if (typingWrap) typingWrap.remove();
+
+  const agent = getAgent(agentKey);
+
+  const group = document.createElement('div');
+  group.className = 'qb-group';
+
+  const agentCard = document.createElement('div');
+  agentCard.className = 'qb-agent-card';
+  agentCard.innerHTML = `
+    <span class="qb-agent-icon" aria-hidden="true">${agent.emoji}</span>
+    <span class="qb-agent-meta">
+      <span class="qb-agent-name">${agent.name}</span>
+      <span class="qb-agent-title">${agent.title}</span>
+    </span>
+  `;
+  group.appendChild(agentCard);
+
+  const row = document.createElement('div');
+  row.className = 'qb-row';
+
+  const av = document.createElement('div');
+  av.className = 'qb-msg-avatar';
+  av.setAttribute('aria-hidden', 'true');
+  av.textContent = agent.emoji;
+
+  const bubble = document.createElement('div');
+  bubble.className = isError ? 'qb-bubble ai error' : 'qb-bubble ai';
+  bubble.textContent = text;
+
+  row.appendChild(av);
+  row.appendChild(bubble);
+  group.appendChild(row);
+
+  const timeEl = document.createElement('div');
+  timeEl.className = 'qb-bubble-time';
+  timeEl.style.paddingLeft = '39px';
+  timeEl.textContent = now();
+  group.appendChild(timeEl);
+
+  bodyEl.appendChild(group);
+  scrollToBottom();
+}
+
+function normalizeBackendResponse(data, rawText) {
+  const payload = data && typeof data === 'object' && data.data && typeof data.data === 'object'
+    ? data.data
+    : data;
+
+  if (!payload || typeof payload !== 'object') {
+    return {
+      reply: rawText || 'Resposta recebida.',
+      agent: 'default',
+      tokens: null,
+    };
   }
 
-  if (isDebug) {
-    label.textContent = 'assistant · CONSULTANDO ZAIA (RECEPCIONISTA)...';
-    bubble.innerHTML  = text + `<span class="time">${now}</span>`;
-    wrap.style.display = debugMode ? '' : 'none';
-  } else if (role === 'user') {
-    label.textContent = 'user';
-    bubble.innerHTML  = quoteHtml + esc(text) + `<span class="time">${now}</span>`;
-  } else {
-    const displayName = agentName ? agentName.toLowerCase() : 'assistant';
-    label.textContent = displayName;
-    bubble.innerHTML  = quoteHtml + esc(text) + `<span class="time">${now}</span>`;
-  }
-
-  // Reply button
-  if (!isDebug) {
-    const rBtn = document.createElement('button');
-    rBtn.className   = 'reply-btn';
-    rBtn.innerHTML   = '↩ Responder';
-    const author     = role === 'user' ? 'Você' : (agentName || 'assistant');
-    const plainText  = text.replace(/<[^>]+>/g,'');
-    rBtn.onclick     = () => startReply(id, author, plainText);
-    wrap.appendChild(rBtn);
-  }
-
-  wrap.appendChild(label);
-  wrap.appendChild(bubble);
-  msgs.appendChild(wrap);
-  msgs.scrollTop = msgs.scrollHeight;
-  return { wrap, id };
+  return {
+    reply:
+      payload.reply ??
+      payload.rawReply ??
+      payload.raw_reply ??
+      payload.message ??
+      payload.content ??
+      payload.answer ??
+      payload.response ??
+      payload.text ??
+      rawText ??
+      'Resposta recebida.',
+    agent:
+      payload.agent ??
+      payload.agentName ??
+      payload.agent_name ??
+      payload.selectedAgent ??
+      payload.responder ??
+      payload.route ??
+      payload.agente ??
+      'Sistema',
+    tokens:
+      typeof payload.tokens === 'number' ? payload.tokens :
+      typeof payload.remainingTokens === 'number' ? payload.remainingTokens :
+      typeof payload.remaining_tokens === 'number' ? payload.remaining_tokens :
+      typeof data?.tokens === 'number' ? data.tokens :
+      null,
+  };
 }
 
-function appendTyping() {
-  const msgs = document.getElementById('messages');
-  const div = document.createElement('div');
-  div.id = 'typing';
-  div.className = 'msg-wrap bot';
-  div.innerHTML = '<div class="msg bot"><div class="typing"><span></span><span></span><span></span></div></div>';
-  msgs.appendChild(div);
-  msgs.scrollTop = msgs.scrollHeight;
-}
+async function sendToZaia(message) {
+  /*
+    IMPORTANTE:
+    A tela chama o proxy interno /api/chat.php.
+    O PHP chama a Zaia pelo servidor.
+    Assim não dá erro de CORS/Failed to fetch no navegador.
+  */
+  const response = await fetch('/api/chat.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message,
+      content: message,
+      question: message,
+    }),
+  });
 
-function removeTyping() {
-  document.getElementById('typing')?.remove();
-}
-
-function esc(s) {
-  return String(s)
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
-    .replace(/\*([^*]+)\*/g,'<em>$1</em>')
-    .replace(/\n/g,'<br>');
-}
-
-// ── Polling status ──────────────────────────────────────────────
-function startPoll() {
-  jobActive++;
-  pollCount = 0;
-  pollStart = Date.now();
-  updatePollInfo();
-  if (!pollTimer) pollTimer = setInterval(tickPoll, 2000);
-}
-
-function stopPoll() {
-  jobActive = Math.max(0, jobActive - 1);
-  if (jobActive === 0) {
-    clearInterval(pollTimer); pollTimer = null;
-    document.getElementById('pollInfo').style.display = 'none';
-  }
-}
-
-function tickPoll() {
-  pollCount++;
-  updatePollInfo();
-  // Opcional: fazer GET /api/status.php e mostrar no debug
-  if (debugMode) {
-    fetch('/api/status.php?action=status').then(r => r.json()).then(d => {
-      // atualiza tokens bar se vier info
-    }).catch(() => {});
-  }
-}
-
-function updatePollInfo() {
-  const el = document.getElementById('pollInfo');
-  const ms = Math.round((Date.now() - pollStart) / 100) * 100;
-  el.textContent = `Polling ~${ms}ms · ${pollCount} job(s) · ${jobActive} ativo(s)   Timeout job: 120s`;
-  el.style.display = jobActive > 0 ? 'inline-block' : 'none';
-}
-
-// ── Send ────────────────────────────────────────────────────────
-let isSending = false;
-
-function lockInput(lock) {
-  isSending = lock;
-  const btn = document.getElementById('sendBtn');
-  const inp = document.getElementById('msgInput');
-  btn.disabled = lock;
-  inp.disabled = lock;
-  inp.style.opacity = lock ? '0.5' : '1';
-  inp.style.cursor  = lock ? 'not-allowed' : '';
-}
-
-async function sendMessage() {
-  if (isSending) return;          // bloqueia duplo envio
-  const msg = input.value.trim();
-  if (!msg) return;
-
-  if (!ZAIA_URL) {
-    appendMsg('⚠ ZAIA_WEBHOOK_URL não configurado no .env', 'bot');
-    return;
-  }
-
-  input.value = '';
-  input.style.height = 'auto';
-  lockInput(true);
-
-  // Captura reply antes de limpar
-  const currentReply = replyingTo ? { ...replyingTo } : null;
-  cancelReply();
-
-  appendMsg(msg, 'user', false, null, currentReply);
-
-  // Debug info
-  const pollInfo = `poll #${pollCount + 1} · ~1s · GET /api.php?action=status&poll_zaia=1\nConsultando Zaia (recepcionista)......`;
-  appendMsg(pollInfo, 'bot', true);
-
-  appendTyping();
-  startPoll();
+  const rawText = await response.text();
+  let data = null;
 
   try {
-    const res  = await fetch(ZAIA_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: msg, question: msg, content: msg }),
-    });
+    data = JSON.parse(rawText);
+  } catch (_) {}
 
-    const raw = await res.text();
-    let data;
-    try { data = JSON.parse(raw); } catch { data = { reply: raw }; }
+  if (!response.ok) {
+    throw new Error(data?.error || rawText || 'Falha ao consultar a Zaia.');
+  }
 
-    removeTyping();
+  return normalizeBackendResponse(data, rawText);
+}
 
-    // Suporte à estrutura { agent, reply } ou { data: { agent, reply } }
-    const payload   = data.data ?? data;
-    const reply     = payload.reply ?? payload.message ?? payload.error ?? JSON.stringify(data, null, 2);
-    const agentName = payload.agent ?? null;
+async function handleSend(text) {
+  text = text.trim();
+  if (!text || isTyping) return;
 
-    appendMsg(reply, 'bot', false, agentName);
+  isTyping = true;
+  sendBtn.disabled = true;
+  input.value = '';
+  input.style.height = 'auto';
 
-  } catch (e) {
-    removeTyping();
-    appendMsg('❌ Erro ao contatar a Zaia: ' + e.message, 'bot');
+  appendUserMsg(text);
+  showTypingIndicator('lia');
+
+  try {
+    const result = await sendToZaia(text);
+
+    appendAIMsg(result.reply, result.agent);
+
+    if (typeof result.tokens === 'number') {
+      updateTokenDisplay(result.tokens);
+    }
+  } catch (error) {
+    appendAIMsg('Erro ao enviar mensagem: ' + error.message, 'sistema', true);
   } finally {
-    lockInput(false);
-    stopPoll();
+    isTyping = false;
+    sendBtn.disabled = input.value.trim().length === 0;
     input.focus();
   }
 }
 
-function sendQuick(msg) {
-  input.value = msg;
-  sendMessage();
-}
+input.addEventListener('input', () => {
+  sendBtn.disabled = input.value.trim().length === 0 || isTyping;
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+});
 
-// ── Health check passivo ────────────────────────────────────────
-fetch('/api/status.php?action=status')
-  .then(r => r.json())
-  .then(d => {
-    document.getElementById('tokensBar').textContent =
-      'Tokens (IA) disponíveis: —   Backend: ' + (d.backend ?? '?') + '   DB: ' + (d.db ?? '?');
-  })
-  .catch(() => {});
+input.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    if (!sendBtn.disabled) handleSend(input.value);
+  }
+});
+
+sendBtn.addEventListener('click', () => handleSend(input.value));
+
+updateTokenDisplay(currentTokens);
 </script>
 </body>
 </html>
