@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ["php"]
+nixPkgs = ["php83", "php83Extensions.pdo_mysql", "php83Extensions.curl", "php83Extensions.mbstring", "php83Extensions.pdo"]
 
 [phases.build]
 cmds = ["echo 'No build needed'"]
