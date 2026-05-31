@@ -2,6 +2,6 @@
 builder = "nixpacks"
 
 [deploy]
-startCommand = "php -S 0.0.0.0:$PORT -t public public/router.php"
+startCommand = "PHP_CLI_SERVER_WORKERS=4 php -S 0.0.0.0:$PORT -t public public/router.php"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
