@@ -75,7 +75,7 @@ curl_setopt_array($ch, [
         'Accept: application/json',
     ],
     CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_TIMEOUT => 45,
+    CURLOPT_TIMEOUT => 120,
     CURLOPT_CONNECTTIMEOUT => 15,
 ]);
 
