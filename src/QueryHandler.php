@@ -13,7 +13,7 @@ final class QueryHandler
         $action = isset($payload['action']) ? trim((string)$payload['action']) : 'health';
 
         if (!in_array($action, self::ALLOWED_ACTIONS, true)) {
-            return self::error("Ação desconhecida: \"{$action}\". Use: " . implode(', ', self::ALLOWED_ACTIONS), 400);
+            return self::error('Ação desconhecida: "' . $action . '". Use: ' . implode(', ', self::ALLOWED_ACTIONS), 400);
         }
 
         return match ($action) {
@@ -29,9 +29,24 @@ final class QueryHandler
 
     private static function health(): array
     {
-        $db = null;
-        try { $db = Database::connection(); $dbOk = true; } catch (\Throwable) { $dbOk = false; }
-        return ['success' => true, 'status' => 'online', 'db' => $dbOk ? 'connected' : 'error', 'action' => 'health'];
+        try {
+            $db = Database::connection();
+            $tables = $db->query('SHOW TABLES')->fetchAll(PDO::FETCH_COLUMN);
+            return [
+                'success' => true,
+                'status' => 'online',
+                'db' => 'connected',
+                'database' => Config::get('DB_DATABASE') ?: Config::get('DB_NAME') ?: Config::get('MYSQLDATABASE'),
+                'tables' => $tables,
+                'action' => 'health',
+            ];
+        } catch (Throwable $e) {
+            $out = ['success' => true, 'status' => 'online', 'db' => 'error', 'action' => 'health'];
+            if (Config::bool('APP_DEBUG')) {
+                $out['db_error'] = $e->getMessage();
+            }
+            return $out;
+        }
     }
 
     private static function salesSummary(array $p): array
@@ -39,24 +54,27 @@ final class QueryHandler
         $period = $p['period'] ?? 'today';
         [$start, $end] = self::periodRange($period);
 
-        $db  = Database::connection();
-        $stmt = $db->prepare("
-            SELECT COUNT(*) AS total_orders,
-                   COALESCE(SUM(total),0) AS revenue,
-                   COALESCE(AVG(total),0) AS avg_ticket
-            FROM orders
-            WHERE status = 'completed'
-              AND created_at >= ? AND created_at < ?
-        ");
+        $db = Database::connection();
+        $statusSql = Database::completedStatusSql('o');
+        $stmt = $db->prepare(<<<SQL
+            SELECT COUNT(DISTINCT o.id) AS total_orders,
+                   COALESCE(SUM(o.total), 0) AS revenue,
+                   COALESCE(AVG(NULLIF(o.total, 0)), 0) AS avg_ticket
+            FROM orders o
+            WHERE {$statusSql}
+              AND o.created_at >= ? AND o.created_at < ?
+        SQL);
         $stmt->execute([$start, $end]);
-        $row = $stmt->fetch();
+        $row = $stmt->fetch() ?: ['total_orders' => 0, 'revenue' => 0, 'avg_ticket' => 0];
 
         return [
-            'success' => true, 'action' => 'sales_summary', 'period' => $period,
+            'success' => true,
+            'action' => 'sales_summary',
+            'period' => $period,
             'data' => [
                 'total_orders' => (int)$row['total_orders'],
-                'revenue'      => round((float)$row['revenue'],    2),
-                'avg_ticket'   => round((float)$row['avg_ticket'], 2),
+                'revenue' => round((float)$row['revenue'], 2),
+                'avg_ticket' => round((float)$row['avg_ticket'], 2),
                 'period_label' => self::periodLabel($period),
             ],
         ];
@@ -65,45 +83,59 @@ final class QueryHandler
     private static function topProducts(array $p): array
     {
         $limit = max(1, min(20, (int)($p['limit'] ?? 5)));
-        $db    = Database::connection();
-        $stmt  = $db->prepare("
-            SELECT product, SUM(quantity) AS units_sold, SUM(total) AS revenue
-            FROM orders WHERE status='completed'
-            GROUP BY product ORDER BY revenue DESC LIMIT ?
-        ");
+        $db = Database::connection();
+        $statusSql = Database::completedStatusSql('o');
+        $stmt = $db->prepare(<<<SQL
+            SELECT p.name AS product,
+                   SUM(oi.quantity) AS units_sold,
+                   SUM(COALESCE(NULLIF(oi.subtotal, 0), oi.quantity * oi.unit_price, oi.quantity * p.price)) AS revenue
+            FROM order_items oi
+            INNER JOIN orders o ON o.id = oi.order_id
+            INNER JOIN products p ON p.id = oi.product_id
+            WHERE {$statusSql}
+            GROUP BY p.id, p.name
+            ORDER BY revenue DESC, units_sold DESC
+            LIMIT ?
+        SQL);
         $stmt->execute([$limit]);
+
         return [
-            'success' => true, 'action' => 'top_products',
-            'data' => array_map(fn($r) => [
-                'product'    => $r['product'],
+            'success' => true,
+            'action' => 'top_products',
+            'data' => array_map(static fn($r) => [
+                'product' => $r['product'],
                 'units_sold' => (int)$r['units_sold'],
-                'revenue'    => round((float)$r['revenue'], 2),
+                'revenue' => round((float)$r['revenue'], 2),
             ], $stmt->fetchAll()),
         ];
     }
 
     private static function customersCount(): array
     {
-        $total = (int)Database::connection()->query("SELECT COUNT(*) FROM customers")->fetchColumn();
+        $total = (int)Database::connection()->query('SELECT COUNT(*) FROM customers')->fetchColumn();
         return ['success' => true, 'action' => 'customers_count', 'data' => ['total_customers' => $total]];
     }
 
     private static function lowStock(array $p): array
     {
         $threshold = max(0, (int)($p['threshold'] ?? 10));
-        $stmt = Database::connection()->prepare("
-            SELECT p.name, p.stock, c.name AS category
-            FROM products p
-            LEFT JOIN categories c ON c.id = p.category_id
-            WHERE p.active=1 AND p.stock <= ?
-            ORDER BY p.stock ASC
-        ");
+        $db = Database::connection();
+        $hasCategory = Database::hasColumn('products', 'category_id');
+
+        $sql = $hasCategory
+            ? 'SELECT p.name, p.stock, c.name AS category FROM products p LEFT JOIN categories c ON c.id = p.category_id WHERE p.active=1 AND p.stock <= ? ORDER BY p.stock ASC'
+            : 'SELECT p.name, p.stock, NULL AS category FROM products p WHERE p.active=1 AND p.stock <= ? ORDER BY p.stock ASC';
+
+        $stmt = $db->prepare($sql);
         $stmt->execute([$threshold]);
+
         return [
-            'success' => true, 'action' => 'low_stock', 'threshold' => $threshold,
-            'data' => array_map(fn($r) => [
-                'name'     => $r['name'],
-                'stock'    => (int)$r['stock'],
+            'success' => true,
+            'action' => 'low_stock',
+            'threshold' => $threshold,
+            'data' => array_map(static fn($r) => [
+                'name' => $r['name'],
+                'stock' => (int)$r['stock'],
                 'category' => $r['category'] ?? 'geral',
             ], $stmt->fetchAll()),
         ];
@@ -112,20 +144,34 @@ final class QueryHandler
     private static function recentOrders(array $p): array
     {
         $limit = max(1, min(50, (int)($p['limit'] ?? 10)));
-        $stmt  = Database::connection()->prepare("
-            SELECT customer, product, quantity, unit_price, total, status, created_at
-            FROM orders ORDER BY created_at DESC LIMIT ?
-        ");
+        $db = Database::connection();
+        $stmt = $db->prepare(<<<SQL
+            SELECT o.id,
+                   COALESCE(c.name, CONCAT('Cliente #', o.customer_id), 'Cliente') AS customer,
+                   GROUP_CONCAT(CONCAT(p.name, ' x', oi.quantity) ORDER BY p.name SEPARATOR ', ') AS product,
+                   SUM(oi.quantity) AS quantity,
+                   SUM(COALESCE(NULLIF(oi.subtotal, 0), oi.quantity * oi.unit_price, oi.quantity * p.price)) AS total,
+                   o.status,
+                   o.created_at
+            FROM orders o
+            LEFT JOIN customers c ON c.id = o.customer_id
+            LEFT JOIN order_items oi ON oi.order_id = o.id
+            LEFT JOIN products p ON p.id = oi.product_id
+            GROUP BY o.id, c.name, o.customer_id, o.status, o.created_at
+            ORDER BY o.created_at DESC
+            LIMIT ?
+        SQL);
         $stmt->execute([$limit]);
+
         return [
-            'success' => true, 'action' => 'recent_orders',
-            'data' => array_map(fn($r) => [
-                'customer'   => $r['customer'],
-                'product'    => $r['product'],
-                'quantity'   => (int)$r['quantity'],
-                'unit_price' => round((float)$r['unit_price'], 2),
-                'total'      => round((float)$r['total'],      2),
-                'status'     => $r['status'],
+            'success' => true,
+            'action' => 'recent_orders',
+            'data' => array_map(static fn($r) => [
+                'customer' => $r['customer'],
+                'product' => $r['product'] ?: 'Sem itens',
+                'quantity' => (int)($r['quantity'] ?? 0),
+                'total' => round((float)($r['total'] ?? 0), 2),
+                'status' => $r['status'],
                 'created_at' => $r['created_at'],
             ], $stmt->fetchAll()),
         ];
@@ -134,51 +180,39 @@ final class QueryHandler
     private static function productsList(array $p): array
     {
         $limit = max(1, min(100, (int)($p['limit'] ?? 20)));
-        $stmt  = Database::connection()->prepare("
-            SELECT p.id, p.name, p.price, p.stock, c.name AS category, p.active
-            FROM products p
-            LEFT JOIN categories c ON c.id = p.category_id
-            WHERE p.active=1
-            ORDER BY p.name LIMIT ?
-        ");
+        $db = Database::connection();
+        $hasCategory = Database::hasColumn('products', 'category_id');
+
+        $sql = $hasCategory
+            ? 'SELECT p.id, p.name, p.price, p.stock, c.name AS category, p.active FROM products p LEFT JOIN categories c ON c.id = p.category_id WHERE p.active=1 ORDER BY p.name LIMIT ?'
+            : 'SELECT p.id, p.name, p.price, p.stock, NULL AS category, p.active FROM products p WHERE p.active=1 ORDER BY p.name LIMIT ?';
+
+        $stmt = $db->prepare($sql);
         $stmt->execute([$limit]);
+
         return [
-            'success' => true, 'action' => 'products_list',
-            'data' => array_map(fn($r) => [
-                'id'       => (int)$r['id'],
-                'name'     => $r['name'],
-                'price'    => round((float)$r['price'], 2),
-                'stock'    => (int)$r['stock'],
+            'success' => true,
+            'action' => 'products_list',
+            'data' => array_map(static fn($r) => [
+                'id' => (int)$r['id'],
+                'name' => $r['name'],
+                'price' => round((float)$r['price'], 2),
+                'stock' => (int)$r['stock'],
                 'category' => $r['category'] ?? 'geral',
             ], $stmt->fetchAll()),
         ];
     }
 
-    // ── Helpers ────────────────────────────────────────────────────
-
-    /** Retorna [start, end] em formato MySQL DATETIME */
     private static function periodRange(string $period): array
     {
         $tz = new DateTimeZone(Config::get('APP_TIMEZONE', 'America/Sao_Paulo'));
         $now = new DateTimeImmutable('now', $tz);
 
         return match ($period) {
-            'yesterday' => [
-                $now->modify('-1 day')->format('Y-m-d 00:00:00'),
-                $now->format('Y-m-d 00:00:00'),
-            ],
-            'week' => [
-                $now->modify('-7 days')->format('Y-m-d H:i:s'),
-                $now->modify('+1 second')->format('Y-m-d H:i:s'),
-            ],
-            'month' => [
-                $now->modify('-30 days')->format('Y-m-d H:i:s'),
-                $now->modify('+1 second')->format('Y-m-d H:i:s'),
-            ],
-            default => [ // today
-                $now->format('Y-m-d 00:00:00'),
-                $now->modify('+1 day')->format('Y-m-d 00:00:00'),
-            ],
+            'yesterday' => [$now->modify('-1 day')->format('Y-m-d 00:00:00'), $now->format('Y-m-d 00:00:00')],
+            'week' => [$now->modify('-7 days')->format('Y-m-d H:i:s'), $now->modify('+1 second')->format('Y-m-d H:i:s')],
+            'month' => [$now->modify('-30 days')->format('Y-m-d H:i:s'), $now->modify('+1 second')->format('Y-m-d H:i:s')],
+            default => [$now->format('Y-m-d 00:00:00'), $now->modify('+1 day')->format('Y-m-d 00:00:00')],
         };
     }
 
@@ -186,9 +220,9 @@ final class QueryHandler
     {
         return match ($period) {
             'yesterday' => 'ontem',
-            'week'      => 'últimos 7 dias',
-            'month'     => 'últimos 30 dias',
-            default     => 'hoje',
+            'week' => 'últimos 7 dias',
+            'month' => 'últimos 30 dias',
+            default => 'hoje',
         };
     }
 

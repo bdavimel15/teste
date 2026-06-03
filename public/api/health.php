@@ -14,19 +14,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit;
 }
 
-$db = null;
 try {
     $db = Database::connection();
     $dbStatus = 'connected';
-} catch (Throwable) {
+    $tables = $db->query('SHOW TABLES')->fetchAll(PDO::FETCH_COLUMN);
+    $dbError = null;
+} catch (Throwable $e) {
     $dbStatus = 'error';
+    $tables = [];
+    $dbError = $e->getMessage();
 }
 
-echo json_encode([
+$out = [
     'success'  => true,
     'status'   => 'online',
     'db'       => $dbStatus,
+    'tables'   => $tables,
     'php'      => PHP_VERSION,
     'timezone' => date_default_timezone_get(),
     'time'     => date('Y-m-d H:i:s'),
-], JSON_UNESCAPED_UNICODE);
+];
+
+if ($dbError && Config::bool('APP_DEBUG')) {
+    $out['db_error'] = $dbError;
+}
+
+echo json_encode($out, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
