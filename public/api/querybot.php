@@ -7,19 +7,17 @@ declare(strict_types=1);
  *
  * Endpoint chamado pela Zaia via HTTP Request Node.
  *
- * Agora aceita vários formatos:
- *
- * 1) JSON direto:
+ * Aceita:
+ * 1) JSON direto com action:
  *    { "action": "sales_summary", "period": "month" }
  *
- * 2) Zaia content como objeto:
- *    { "content": { "action": "sales_summary", "period": "month" } }
+ * 2) Content como objeto/string:
+ *    { "content": { "action": "top_products", "limit": 5 } }
+ *    { "content": "{\"action\":\"top_products\",\"limit\":5}" }
  *
- * 3) Zaia content como string JSON:
- *    { "content": "{\"action\":\"sales_summary\",\"period\":\"month\"}" }
- *
- * 4) Body inteiro como string JSON:
- *    "{\"action\":\"sales_summary\",\"period\":\"month\"}"
+ * 3) Texto simples vindo da Zaia:
+ *    { "content": "quais produtos mais venderam?" }
+ *    { "mensagem": "clientes que compraram picanha" }
  */
 
 require_once dirname(__DIR__, 2) . '/src/bootstrap.php';
@@ -81,13 +79,123 @@ function qb_try_json_decode(mixed $value): mixed
     return $value;
 }
 
+function qb_find_text(mixed $payload): string
+{
+    $payload = qb_try_json_decode($payload);
+
+    if (is_string($payload)) {
+        return trim($payload);
+    }
+
+    if (!is_array($payload)) {
+        return '';
+    }
+
+    $keys = [
+        'message', 'mensagem', 'texto', 'text', 'prompt', 'pergunta',
+        'query', 'content', 'body', 'input', 'descricao', 'description',
+    ];
+
+    foreach ($keys as $key) {
+        if (!array_key_exists($key, $payload)) {
+            continue;
+        }
+
+        $value = qb_try_json_decode($payload[$key]);
+
+        if (is_string($value) && trim($value) !== '') {
+            return trim($value);
+        }
+
+        if (is_array($value)) {
+            $inner = qb_find_text($value);
+            if ($inner !== '') {
+                return $inner;
+            }
+        }
+    }
+
+    return '';
+}
+
+function qb_infer_payload_from_text(string $text): array
+{
+    $t = mb_strtolower(trim($text));
+
+    if ($t === '') {
+        return [];
+    }
+
+    // Health/diagnóstico
+    if (str_contains($t, 'diagn') || str_contains($t, 'health') || str_contains($t, 'status')) {
+        return ['action' => 'health'];
+    }
+
+    // Produto específico comprado por cliente
+    if (preg_match('/clientes?\s+que\s+compraram\s+(.+)/iu', $text, $m)) {
+        $product = trim($m[1], " \t\n\r\0\x0B?.!,");
+        if ($product !== '') {
+            return ['action' => 'customers_by_product', 'product' => $product, 'limit' => 20];
+        }
+    }
+
+    // Produtos mais vendidos / ranking
+    if (
+        str_contains($t, 'produto') &&
+        (str_contains($t, 'mais vendido') || str_contains($t, 'top') || str_contains($t, 'ranking') || str_contains($t, 'vendeu mais'))
+    ) {
+        $limit = 5;
+        if (preg_match('/(?:top|primeir[oa]s?)\s+(\d+)/iu', $text, $m)) {
+            $limit = max(1, min(20, (int)$m[1]));
+        }
+        return ['action' => 'top_products', 'limit' => $limit];
+    }
+
+    // Listar produtos
+    if (str_contains($t, 'listar produtos') || str_contains($t, 'lista de produtos') || $t === 'produtos') {
+        return ['action' => 'products_list', 'limit' => 20];
+    }
+
+    // Estoque baixo
+    if (str_contains($t, 'estoque baixo') || str_contains($t, 'baixo estoque')) {
+        return ['action' => 'low_stock', 'threshold' => 10];
+    }
+
+    // Clientes
+    if (str_contains($t, 'quantos clientes') || str_contains($t, 'total de clientes') || $t === 'clientes') {
+        return ['action' => 'customers_count'];
+    }
+
+    // Pedidos recentes
+    if (str_contains($t, 'últimos pedidos') || str_contains($t, 'ultimos pedidos') || str_contains($t, 'pedidos recentes')) {
+        return ['action' => 'recent_orders', 'limit' => 10];
+    }
+
+    // Vendas/faturamento
+    if (str_contains($t, 'venda') || str_contains($t, 'faturamento') || str_contains($t, 'receita') || str_contains($t, 'pedido')) {
+        $period = 'today';
+
+        if (str_contains($t, 'ontem')) {
+            $period = 'yesterday';
+        } elseif (str_contains($t, 'semana') || str_contains($t, '7 dias')) {
+            $period = 'week';
+        } elseif (str_contains($t, 'mês') || str_contains($t, 'mes') || str_contains($t, '30 dias')) {
+            $period = 'month';
+        }
+
+        return ['action' => 'sales_summary', 'period' => $period];
+    }
+
+    return [];
+}
+
 function qb_normalize_payload(mixed $payload): array
 {
     $payload = qb_try_json_decode($payload);
 
-    // Caso o body inteiro seja uma string JSON que virou array.
     if (is_string($payload)) {
-        $payload = ['message' => $payload];
+        $textPayload = qb_infer_payload_from_text($payload);
+        return $textPayload ?: ['message' => $payload];
     }
 
     if (!is_array($payload)) {
@@ -95,16 +203,18 @@ function qb_normalize_payload(mixed $payload): array
     }
 
     // Se já veio certo, mantém.
-    if (isset($payload['action'])) {
+    if (isset($payload['action']) && is_string($payload['action']) && trim($payload['action']) !== '') {
         return $payload;
     }
 
-    // Zaia pode mandar dentro de content/output/text/message.
+    // Zaia pode mandar action dentro de content/output/text/message/data/result/response.
     $possibleKeys = [
         'content',
         'output',
         'text',
         'message',
+        'mensagem',
+        'texto',
         'body',
         'data',
         'result',
@@ -118,18 +228,15 @@ function qb_normalize_payload(mixed $payload): array
 
         $candidate = qb_try_json_decode($payload[$key]);
 
-        // content como objeto
         if (is_array($candidate)) {
             if (isset($candidate['action'])) {
                 return $candidate;
             }
 
-            // Às vezes vem content.data.action
             if (isset($candidate['data']) && is_array($candidate['data']) && isset($candidate['data']['action'])) {
                 return $candidate['data'];
             }
 
-            // Às vezes vem content.content = "{...}"
             foreach ($possibleKeys as $innerKey) {
                 if (isset($candidate[$innerKey])) {
                     $inner = qb_try_json_decode($candidate[$innerKey]);
@@ -141,7 +248,6 @@ function qb_normalize_payload(mixed $payload): array
         }
     }
 
-    // Se veio route/action separados de outro jeito, tenta resgatar.
     $action = $payload['action']
         ?? $payload['routeAction']
         ?? $payload['selectedAction']
@@ -150,6 +256,15 @@ function qb_normalize_payload(mixed $payload): array
     if ($action) {
         $payload['action'] = $action;
         return $payload;
+    }
+
+    // Fallback: se veio texto natural, interpreta para action.
+    $text = qb_find_text($payload);
+    $inferred = qb_infer_payload_from_text($text);
+
+    if ($inferred) {
+        $inferred['_original_text'] = $text;
+        return $inferred;
     }
 
     return $payload;
@@ -161,7 +276,7 @@ if ($raw === false || trim($raw) === '') {
     http_response_code(400);
     echo json_encode([
         'success' => false,
-        'error' => 'Body vazio. Envie JSON com o campo "action".'
+        'error' => 'Body vazio. Envie JSON com action ou texto em content/mensagem.'
     ], JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -169,37 +284,32 @@ if ($raw === false || trim($raw) === '') {
 $decodedRaw = json_decode($raw, true);
 
 if (json_last_error() !== JSON_ERROR_NONE) {
-    http_response_code(400);
-    echo json_encode([
-        'success' => false,
-        'error' => 'JSON inválido: ' . json_last_error_msg(),
-        'rawPreview' => mb_substr($raw, 0, 300),
-    ], JSON_UNESCAPED_UNICODE);
-    exit;
+    // Se veio texto puro, tenta interpretar.
+    $payload = qb_normalize_payload($raw);
+} else {
+    $payload = qb_normalize_payload($decodedRaw);
 }
-
-$payload = qb_normalize_payload($decodedRaw);
 
 if (!is_array($payload)) {
     $payload = [];
 }
 
-// Defaults seguros para sales_summary sem period.
 if (($payload['action'] ?? '') === 'sales_summary' && empty($payload['period'])) {
     $payload['period'] = 'today';
 }
 
-// Resposta clara quando a Zaia mandar o formato errado.
 if (empty($payload['action'])) {
     http_response_code(400);
     echo json_encode([
         'success' => false,
-        'error' => 'Campo action não encontrado no body recebido.',
-        'received' => $decodedRaw,
+        'error' => 'Campo action não encontrado e não foi possível interpretar o texto recebido.',
+        'received' => $decodedRaw ?? $raw,
         'expected_examples' => [
             ['action' => 'sales_summary', 'period' => 'month'],
-            ['content' => ['action' => 'sales_summary', 'period' => 'month']],
-            ['content' => '{"action":"sales_summary","period":"month"}'],
+            ['action' => 'top_products', 'limit' => 5],
+            ['action' => 'customers_by_product', 'product' => 'Picanha'],
+            ['content' => 'clientes que compraram picanha'],
+            ['content' => 'produtos mais vendidos'],
         ],
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
     exit;

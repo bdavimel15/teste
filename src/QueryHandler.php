@@ -5,7 +5,7 @@ final class QueryHandler
 {
     private const ALLOWED_ACTIONS = [
         'health','sales_summary','top_products','customers_count',
-        'low_stock','recent_orders','products_list',
+        'low_stock','recent_orders','products_list','customers_by_product',
     ];
 
     public static function handle(array $payload): array
@@ -24,6 +24,7 @@ final class QueryHandler
             'low_stock'       => self::lowStock($payload),
             'recent_orders'   => self::recentOrders($payload),
             'products_list'   => self::productsList($payload),
+            'customers_by_product' => self::customersByProduct($payload),
         };
     }
 
@@ -199,6 +200,58 @@ final class QueryHandler
                 'price' => round((float)$r['price'], 2),
                 'stock' => (int)$r['stock'],
                 'category' => $r['category'] ?? 'geral',
+            ], $stmt->fetchAll()),
+        ];
+    }
+
+
+    private static function customersByProduct(array $p): array
+    {
+        $product = trim((string)($p['product'] ?? $p['produto'] ?? $p['name'] ?? ''));
+        $limit = max(1, min(100, (int)($p['limit'] ?? 20)));
+
+        if ($product === '') {
+            return self::error('Informe o produto. Exemplo: {"action":"customers_by_product","product":"Picanha"}', 400);
+        }
+
+        $db = Database::connection();
+        $statusSql = Database::completedStatusSql('o');
+
+        $stmt = $db->prepare(<<<SQL
+            SELECT c.id,
+                   c.name,
+                   c.email,
+                   c.phone,
+                   COUNT(DISTINCT o.id) AS orders_count,
+                   COALESCE(SUM(oi.quantity), 0) AS units,
+                   COALESCE(SUM(COALESCE(NULLIF(oi.subtotal, 0), oi.quantity * oi.unit_price, oi.quantity * p.price)), 0) AS total_spent,
+                   MAX(o.created_at) AS last_order_at
+            FROM customers c
+            INNER JOIN orders o ON o.customer_id = c.id
+            INNER JOIN order_items oi ON oi.order_id = o.id
+            INNER JOIN products p ON p.id = oi.product_id
+            WHERE {$statusSql}
+              AND p.name LIKE ?
+            GROUP BY c.id, c.name, c.email, c.phone
+            ORDER BY last_order_at DESC, total_spent DESC
+            LIMIT ?
+        SQL);
+
+        $stmt->execute(['%' . $product . '%', $limit]);
+
+        return [
+            'success' => true,
+            'action' => 'customers_by_product',
+            'product' => $product,
+            'data' => array_map(static fn($r) => [
+                'id' => (int)$r['id'],
+                'name' => $r['name'],
+                'email' => $r['email'],
+                'phone' => $r['phone'],
+                'orders_count' => (int)$r['orders_count'],
+                'units' => (int)$r['units'],
+                'total_spent' => round((float)$r['total_spent'], 2),
+                'last_order_at' => $r['last_order_at'],
             ], $stmt->fetchAll()),
         ];
     }
