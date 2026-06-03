@@ -52,8 +52,8 @@ final class QueryHandler
 
     private static function salesSummary(array $p): array
     {
-        $period = $p['period'] ?? 'today';
-        [$start, $end] = self::periodRange($period);
+        $period = (string)($p['period'] ?? 'today');
+        [$start, $end] = self::periodRange($p);
 
         $db = Database::connection();
         $statusSql = Database::completedStatusSql('o');
@@ -84,8 +84,13 @@ final class QueryHandler
     private static function topProducts(array $p): array
     {
         $limit = max(1, min(20, (int)($p['limit'] ?? 5)));
+        $period = (string)($p['period'] ?? 'all');
+        [$start, $end] = self::periodRange($p);
+
         $db = Database::connection();
         $statusSql = Database::completedStatusSql('o');
+        $dateSql = $period === 'all' ? '' : ' AND o.created_at >= ? AND o.created_at < ?';
+
         $stmt = $db->prepare(<<<SQL
             SELECT p.name AS product,
                    SUM(oi.quantity) AS units_sold,
@@ -93,16 +98,19 @@ final class QueryHandler
             FROM order_items oi
             INNER JOIN orders o ON o.id = oi.order_id
             INNER JOIN products p ON p.id = oi.product_id
-            WHERE {$statusSql}
+            WHERE {$statusSql}{$dateSql}
             GROUP BY p.id, p.name
             ORDER BY revenue DESC, units_sold DESC
             LIMIT ?
         SQL);
-        $stmt->execute([$limit]);
+        $bindings = $period === 'all' ? [$limit] : [$start, $end, $limit];
+        $stmt->execute($bindings);
 
         return [
             'success' => true,
             'action' => 'top_products',
+            'period' => $period,
+            'period_label' => self::periodLabel($period),
             'data' => array_map(static fn($r) => [
                 'product' => $r['product'],
                 'units_sold' => (int)$r['units_sold'],
@@ -256,25 +264,128 @@ final class QueryHandler
         ];
     }
 
-    private static function periodRange(string $period): array
+    private static function periodRange(array|string $input): array
     {
+        $payload = is_array($input) ? $input : ['period' => $input];
+        $period = self::normalizePeriod((string)($payload['period'] ?? 'today'));
+
         $tz = new DateTimeZone(Config::get('APP_TIMEZONE', 'America/Sao_Paulo'));
         $now = new DateTimeImmutable('now', $tz);
 
+        // Permite período customizado sem deixar a IA gerar SQL.
+        // Exemplo: {"period":"custom","start_date":"2026-05-01","end_date":"2026-06-01"}
+        if ($period === 'custom') {
+            $startRaw = (string)($payload['start_date'] ?? $payload['start'] ?? '');
+            $endRaw = (string)($payload['end_date'] ?? $payload['end'] ?? '');
+
+            if ($startRaw !== '' && $endRaw !== '') {
+                $start = new DateTimeImmutable($startRaw, $tz);
+                $end = new DateTimeImmutable($endRaw, $tz);
+                return [$start->setTime(0, 0, 0)->format('Y-m-d H:i:s'), $end->setTime(23, 59, 59)->format('Y-m-d H:i:s')];
+            }
+        }
+
         return match ($period) {
-            'yesterday' => [$now->modify('-1 day')->format('Y-m-d 00:00:00'), $now->format('Y-m-d 00:00:00')],
-            'week' => [$now->modify('-7 days')->format('Y-m-d H:i:s'), $now->modify('+1 second')->format('Y-m-d H:i:s')],
-            'month' => [$now->modify('-30 days')->format('Y-m-d H:i:s'), $now->modify('+1 second')->format('Y-m-d H:i:s')],
-            default => [$now->format('Y-m-d 00:00:00'), $now->modify('+1 day')->format('Y-m-d 00:00:00')],
+            'all' => ['1970-01-01 00:00:00', $now->modify('+100 years')->format('Y-m-d H:i:s')],
+
+            'today' => [
+                $now->setTime(0, 0, 0)->format('Y-m-d H:i:s'),
+                $now->modify('+1 day')->setTime(0, 0, 0)->format('Y-m-d H:i:s'),
+            ],
+
+            'yesterday' => [
+                $now->modify('-1 day')->setTime(0, 0, 0)->format('Y-m-d H:i:s'),
+                $now->setTime(0, 0, 0)->format('Y-m-d H:i:s'),
+            ],
+
+            'last_7_days' => [
+                $now->modify('-7 days')->setTime(0, 0, 0)->format('Y-m-d H:i:s'),
+                $now->modify('+1 day')->setTime(0, 0, 0)->format('Y-m-d H:i:s'),
+            ],
+
+            'this_week' => [
+                $now->modify('monday this week')->setTime(0, 0, 0)->format('Y-m-d H:i:s'),
+                $now->modify('monday next week')->setTime(0, 0, 0)->format('Y-m-d H:i:s'),
+            ],
+
+            'last_week' => [
+                $now->modify('monday last week')->setTime(0, 0, 0)->format('Y-m-d H:i:s'),
+                $now->modify('monday this week')->setTime(0, 0, 0)->format('Y-m-d H:i:s'),
+            ],
+
+            'last_30_days' => [
+                $now->modify('-30 days')->setTime(0, 0, 0)->format('Y-m-d H:i:s'),
+                $now->modify('+1 day')->setTime(0, 0, 0)->format('Y-m-d H:i:s'),
+            ],
+
+            'this_month' => [
+                $now->modify('first day of this month')->setTime(0, 0, 0)->format('Y-m-d H:i:s'),
+                $now->modify('first day of next month')->setTime(0, 0, 0)->format('Y-m-d H:i:s'),
+            ],
+
+            'last_month' => [
+                $now->modify('first day of last month')->setTime(0, 0, 0)->format('Y-m-d H:i:s'),
+                $now->modify('first day of this month')->setTime(0, 0, 0)->format('Y-m-d H:i:s'),
+            ],
+
+            'this_year' => [
+                $now->setDate((int)$now->format('Y'), 1, 1)->setTime(0, 0, 0)->format('Y-m-d H:i:s'),
+                $now->setDate(((int)$now->format('Y')) + 1, 1, 1)->setTime(0, 0, 0)->format('Y-m-d H:i:s'),
+            ],
+
+            'last_year' => [
+                $now->setDate(((int)$now->format('Y')) - 1, 1, 1)->setTime(0, 0, 0)->format('Y-m-d H:i:s'),
+                $now->setDate((int)$now->format('Y'), 1, 1)->setTime(0, 0, 0)->format('Y-m-d H:i:s'),
+            ],
+
+            default => [
+                $now->setTime(0, 0, 0)->format('Y-m-d H:i:s'),
+                $now->modify('+1 day')->setTime(0, 0, 0)->format('Y-m-d H:i:s'),
+            ],
+        };
+    }
+
+    private static function normalizePeriod(string $period): string
+    {
+        $period = strtolower(trim($period));
+        $period = str_replace([' ', '-', 'ã', 'á', 'à', 'â', 'é', 'ê', 'í', 'ó', 'ô', 'õ', 'ú', 'ç'], ['_', '_', 'a', 'a', 'a', 'a', 'e', 'e', 'i', 'o', 'o', 'o', 'u', 'c'], $period);
+
+        return match ($period) {
+            'all', 'todos', 'tudo', 'geral' => 'all',
+            'today', 'hoje' => 'today',
+            'yesterday', 'ontem' => 'yesterday',
+
+            'week', 'this_week', 'essa_semana', 'esta_semana', 'semana_atual' => 'this_week',
+            'last_week', 'semana_passada' => 'last_week',
+            'last_7_days', 'ultimos_7_dias', 'ultimos_7' => 'last_7_days',
+
+            'month', 'this_month', 'mes', 'esse_mes', 'este_mes', 'mes_atual' => 'this_month',
+            'last_month', 'last_mouth', 'mes_passado', 'ultimo_mes' => 'last_month',
+            'last_30_days', 'ultimos_30_dias', 'ultimos_30' => 'last_30_days',
+
+            'year', 'this_year', 'ano', 'esse_ano', 'este_ano', 'ano_atual' => 'this_year',
+            'last_year', 'ano_passado', 'ultimo_ano' => 'last_year',
+
+            'custom', 'personalizado' => 'custom',
+            default => $period,
         };
     }
 
     private static function periodLabel(string $period): string
     {
-        return match ($period) {
+        return match (self::normalizePeriod($period)) {
+            'all' => 'todo o período',
+            'today' => 'hoje',
             'yesterday' => 'ontem',
-            'week' => 'últimos 7 dias',
-            'month' => 'últimos 30 dias',
+            'this_week' => 'esta semana',
+            'last_week' => 'semana passada',
+            'last_7_days' => 'últimos 7 dias',
+            'this_month' => 'este mês',
+            'last_month' => 'mês passado',
+            'last_30_days' => 'últimos 30 dias',
+            'this_year' => 'este ano',
+            'last_year' => 'ano passado',
+            'custom' => 'período personalizado',
             default => 'hoje',
         };
     }
