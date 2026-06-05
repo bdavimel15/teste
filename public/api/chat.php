@@ -1,5 +1,12 @@
 <?php
+
+
+
+// resto do código...
 declare(strict_types=1);
+
+set_time_limit(120);
+ini_set('max_execution_time', 120);
 
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_USER_DEPRECATED);
 ini_set('display_errors', '0');

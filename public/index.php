@@ -458,9 +458,10 @@ let currentTokens = <?= $initialTokens ?>;
 let isTyping = false;
 
 const agentMap = {
-  lia: { emoji: '💜', name: 'Lia', title: 'Especialista em Conversação' },
+  lia: { emoji: '🗣️', name: 'Lia', title: 'Especialista em Conversação' },
   querybot: { emoji: '🤖', name: 'QueryBot', title: 'Análise de Dados' },
-  cs: { emoji: '🛟', name: 'CS', title: 'Suporte ao Cliente' },
+  cs: { emoji: '🔧', name: 'CS', title: 'Suporte ao Cliente' },
+  maya: { emoji: '💸', name: 'Maya', title: 'Financeiro' },
   gerente: { emoji: '🧠', name: 'Gerente', title: 'Roteamento Inteligente' },
   formatter: { emoji: '✨', name: 'Formatter', title: 'Formatação de Resposta' },
   sistema: { emoji: '⚙️', name: 'Sistema', title: 'Status da Integração' },
@@ -491,6 +492,7 @@ function normalizeAgentKey(agent) {
   if (key.includes('lia')) return 'lia';
   if (key.includes('query')) return 'querybot';
   if (key.includes('cs') || key.includes('suporte')) return 'cs';
+  if (key.includes('maya') || key.includes('financeiro') || key.includes('financa') || key.includes('finança')) return 'maya';
   if (key.includes('gerente')) return 'gerente';
   if (key.includes('formatter') || key.includes('format')) return 'formatter';
   if (key.includes('sistema')) return 'sistema';
