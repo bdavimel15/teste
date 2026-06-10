@@ -280,20 +280,20 @@ $initialTokens = (int) Config::get('INITIAL_TOKENS', '100');
 
   .qb-row.user .qb-bubble-time { text-align: right; }
 
-  .qb-typing {
+  .qb-thinking-bubble {
+    display: flex;
+    align-items: center;
+    min-height: 38px;
+    min-width: 52px;
+  }
+
+  .qb-typing-dots {
     display: flex;
     align-items: center;
     gap: 4px;
-    padding: 11px 14px;
-    background: #fff;
-    border: 1px solid var(--qb-border);
-    border-radius: 16px;
-    border-bottom-left-radius: 5px;
-    width: fit-content;
-    box-shadow: 0 6px 22px rgba(23,23,37,.05);
   }
 
-  .qb-typing span {
+  .qb-typing-dots span {
     width: 6px;
     height: 6px;
     border-radius: 50%;
@@ -301,8 +301,24 @@ $initialTokens = (int) Config::get('INITIAL_TOKENS', '100');
     animation: typing 1.2s infinite;
   }
 
-  .qb-typing span:nth-child(2) { animation-delay: 0.2s; }
-  .qb-typing span:nth-child(3) { animation-delay: 0.4s; }
+  .qb-typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+  .qb-typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+  .qb-thinking-text {
+    font-size: 14px;
+    line-height: 1.55;
+    color: var(--qb-muted);
+    opacity: 1;
+    transition: opacity 0.35s ease;
+  }
+
+  .qb-thinking-text.is-hidden {
+    display: none;
+  }
+
+  .qb-thinking-text.is-fading {
+    opacity: 0;
+  }
 
   @keyframes typing {
     0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
@@ -457,6 +473,32 @@ const tokenDisplay = document.getElementById('token-display');
 let currentTokens = <?= $initialTokens ?>;
 let isTyping = false;
 
+const THINKING_MIN_DURATION = 800;
+const THINKING_PHRASE_DELAY = 2500;
+const THINKING_PHRASE_INTERVAL = 1750;
+
+const THINKING_PHRASES = [
+  '🔍 Analisando sua solicitação...',
+  '🤖 Processando sua mensagem...',
+  '🧠 Entendendo o contexto...',
+  '💭 Pensando na melhor resposta...',
+  '⚙️ Trabalhando na sua solicitação...',
+  '📝 Organizando as informações...',
+  '🔎 Verificando detalhes...',
+  '📋 Preparando uma resposta...',
+  '✨ Quase pronto...',
+  '⚡ Finalizando...',
+];
+
+const thinkingState = {
+  wrap: null,
+  phraseIndex: 0,
+  phraseTimer: null,
+  phraseDelayTimer: null,
+  textEl: null,
+  dotsEl: null,
+};
+
 const agentMap = {
   lia: { emoji: '🗣️', name: 'Lia', title: 'Especialista em Conversação' },
   querybot: { emoji: '🤖', name: 'QueryBot', title: 'Análise de Dados' },
@@ -530,43 +572,31 @@ function appendUserMsg(text) {
   scrollToBottom();
 }
 
-function showTypingIndicator(agentKey = 'lia') {
-  const agent = getAgent(agentKey);
+function clearThinkingTimers() {
+  if (thinkingState.phraseTimer) {
+    clearInterval(thinkingState.phraseTimer);
+    thinkingState.phraseTimer = null;
+  }
 
-  const wrap = document.createElement('div');
-  wrap.id = 'qb-typing-wrap';
-  wrap.className = 'qb-group';
-
-  const row = document.createElement('div');
-  row.className = 'qb-row';
-
-  const av = document.createElement('div');
-  av.className = 'qb-msg-avatar';
-  av.textContent = agent.emoji;
-
-  const t = document.createElement('div');
-  t.className = 'qb-typing';
-  t.innerHTML = '<span></span><span></span><span></span>';
-  t.setAttribute('aria-label', 'Digitando...');
-
-  row.appendChild(av);
-  row.appendChild(t);
-  wrap.appendChild(row);
-  bodyEl.appendChild(wrap);
-  scrollToBottom();
-
-  return wrap;
+  if (thinkingState.phraseDelayTimer) {
+    clearTimeout(thinkingState.phraseDelayTimer);
+    thinkingState.phraseDelayTimer = null;
+  }
 }
 
-function appendAIMsg(text, agentKey = 'default', isError = false) {
-  const typingWrap = document.getElementById('qb-typing-wrap');
-  if (typingWrap) typingWrap.remove();
+function removeThinkingMessage() {
+  clearThinkingTimers();
 
-  const agent = getAgent(agentKey);
+  const wrap = document.getElementById('qb-typing-wrap');
+  if (wrap) wrap.remove();
 
-  const group = document.createElement('div');
-  group.className = 'qb-group';
+  thinkingState.wrap = null;
+  thinkingState.textEl = null;
+  thinkingState.dotsEl = null;
+  thinkingState.phraseIndex = 0;
+}
 
+function buildAgentCard(agent) {
   const agentCard = document.createElement('div');
   agentCard.className = 'qb-agent-card';
   agentCard.innerHTML = `
@@ -576,7 +606,114 @@ function appendAIMsg(text, agentKey = 'default', isError = false) {
       <span class="qb-agent-title">${agent.title}</span>
     </span>
   `;
-  group.appendChild(agentCard);
+  return agentCard;
+}
+
+function showThinkingMessage(agentKey = 'lia') {
+  removeThinkingMessage();
+
+  const agent = getAgent(agentKey);
+
+  const wrap = document.createElement('div');
+  wrap.id = 'qb-typing-wrap';
+  wrap.className = 'qb-group qb-thinking';
+  wrap.setAttribute('aria-busy', 'true');
+
+  wrap.appendChild(buildAgentCard(agent));
+
+  const row = document.createElement('div');
+  row.className = 'qb-row';
+
+  const av = document.createElement('div');
+  av.className = 'qb-msg-avatar';
+  av.setAttribute('aria-hidden', 'true');
+  av.textContent = agent.emoji;
+
+  const bubble = document.createElement('div');
+  bubble.className = 'qb-bubble ai qb-thinking-bubble';
+  bubble.setAttribute('aria-label', 'Processando resposta...');
+
+  const dotsEl = document.createElement('div');
+  dotsEl.className = 'qb-typing-dots';
+  dotsEl.innerHTML = '<span></span><span></span><span></span>';
+
+  const textEl = document.createElement('div');
+  textEl.className = 'qb-thinking-text is-hidden';
+  textEl.setAttribute('aria-live', 'polite');
+
+  bubble.appendChild(dotsEl);
+  bubble.appendChild(textEl);
+  row.appendChild(av);
+  row.appendChild(bubble);
+  wrap.appendChild(row);
+
+  bodyEl.appendChild(wrap);
+  thinkingState.wrap = wrap;
+  thinkingState.textEl = textEl;
+  thinkingState.dotsEl = dotsEl;
+  scrollToBottom();
+
+  thinkingState.phraseDelayTimer = setTimeout(() => {
+    thinkingState.phraseDelayTimer = null;
+    if (!thinkingState.wrap) return;
+
+    updateThinkingMessage(THINKING_PHRASES[0]);
+
+    thinkingState.phraseTimer = setInterval(() => {
+      if (!thinkingState.wrap) {
+        clearThinkingTimers();
+        return;
+      }
+
+      thinkingState.phraseIndex = (thinkingState.phraseIndex + 1) % THINKING_PHRASES.length;
+      updateThinkingMessage(THINKING_PHRASES[thinkingState.phraseIndex]);
+    }, THINKING_PHRASE_INTERVAL);
+  }, THINKING_PHRASE_DELAY);
+
+  return wrap;
+}
+
+function updateThinkingMessage(text) {
+  const textEl = thinkingState.textEl || document.querySelector('#qb-typing-wrap .qb-thinking-text');
+  const dotsEl = thinkingState.dotsEl || document.querySelector('#qb-typing-wrap .qb-typing-dots');
+
+  if (!textEl || !text) return;
+
+  const applyText = () => {
+    textEl.textContent = text;
+    textEl.classList.remove('is-hidden', 'is-fading');
+    if (dotsEl) dotsEl.style.display = 'none';
+  };
+
+  if (textEl.classList.contains('is-hidden')) {
+    applyText();
+    return;
+  }
+
+  textEl.classList.add('is-fading');
+
+  setTimeout(() => {
+    if (!thinkingState.wrap && !document.getElementById('qb-typing-wrap')) return;
+    applyText();
+    requestAnimationFrame(() => textEl.classList.remove('is-fading'));
+  }, 180);
+}
+
+function waitForThinkingMinimum(startedAt) {
+  const elapsed = Date.now() - startedAt;
+  if (elapsed >= THINKING_MIN_DURATION) return Promise.resolve();
+  return new Promise(resolve => setTimeout(resolve, THINKING_MIN_DURATION - elapsed));
+}
+
+function appendAIMsg(text, agentKey = 'default', isError = false) {
+  removeThinkingMessage();
+
+  const agent = getAgent(agentKey);
+
+  const group = document.createElement('div');
+  group.className = 'qb-group';
+
+  group.appendChild(buildAgentCard(agent));
 
   const row = document.createElement('div');
   row.className = 'qb-row';
@@ -688,17 +825,21 @@ async function handleSend(text) {
   input.style.height = 'auto';
 
   appendUserMsg(text);
-  showTypingIndicator('lia');
+
+  const thinkingStartedAt = Date.now();
+  showThinkingMessage('lia');
 
   try {
     const result = await sendToZaia(text);
 
+    await waitForThinkingMinimum(thinkingStartedAt);
     appendAIMsg(result.reply, result.agent);
 
     if (typeof result.tokens === 'number') {
       updateTokenDisplay(result.tokens);
     }
   } catch (error) {
+    await waitForThinkingMinimum(thinkingStartedAt);
     appendAIMsg('Erro ao enviar mensagem: ' + error.message, 'sistema', true);
   } finally {
     isTyping = false;
